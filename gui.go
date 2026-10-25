@@ -84,6 +84,9 @@ func newProgressDialog(parent *qt.QWidget) *progressDialog {
 	top.AddLayout2(text.QLayout, 1)
 
 	buttons := qt.NewQDialogButtonBox4(qt.QDialogButtonBox__Cancel)
+	// Cancel isn't the action to take when Return is pressed, so don't present it as the default
+	cancelButton := buttons.Button(qt.QDialogButtonBox__Cancel)
+	cancelButton.SetAutoDefault(false)
 	buttons.OnRejected(d.Reject)
 	// rejected covers both the Cancel button and closing the window
 	d.OnRejected(func() {
@@ -148,10 +151,6 @@ func (g *gui) showManager() {
 }
 
 func newGUI(home string, logger *zap.Logger) *gui {
-	// Qt apps on GNOME look out of place without the gtk3 platform theme
-	if os.Getenv("QT_QPA_PLATFORMTHEME") == "" && strings.Contains(os.Getenv("XDG_CURRENT_DESKTOP"), "GNOME") {
-		os.Setenv("QT_QPA_PLATFORMTHEME", "gtk3")
-	}
 	qt.QCoreApplication_SetApplicationName("Everblue")
 	qt.NewQApplication(os.Args)
 	qt.QGuiApplication_SetWindowIcon(qt.NewQIcon2(svgPixmap(logoSVG, 128)))
@@ -171,7 +170,7 @@ func newGUI(home string, logger *zap.Logger) *gui {
 func (g *gui) buildManager() {
 	g.manager = qt.NewQMainWindow2()
 	g.manager.SetWindowTitle("Everblue")
-	g.manager.Resize(560, 440)
+	g.manager.Resize(560, 480)
 
 	prefix := fmt.Sprintf("%s/.local/share/rosemary/prefixes/default", g.home)
 	openFolder := func(path string) func() {
