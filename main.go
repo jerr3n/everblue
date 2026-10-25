@@ -20,7 +20,12 @@ func main() {
 	}
 	logger.Debug("home directory ready", zap.String("dir", home))
 	root := &cli.Command{
-		Name: "everblue",
+		Name:  "everblue",
+		Usage: "Launch Roblox Studio",
+		Action: func(ctx context.Context, cmd *cli.Command) error {
+			runLauncher(home, logger)
+			return nil
+		},
 		Commands: []*cli.Command{
 			{
 				Name:    "setup",
@@ -46,10 +51,11 @@ func main() {
 				},
 			},
 			{
-				Name:  "gui",
-				Usage: "Open the Everblue window",
+				Name:    "cfg",
+				Aliases: []string{"config"},
+				Usage:   "Open the Everblue window",
 				Action: func(ctx context.Context, cmd *cli.Command) error {
-					runGUI(home, logger)
+					runConfig(home, logger)
 					return nil
 				},
 			},

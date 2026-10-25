@@ -117,9 +117,37 @@ type gui struct {
 	rosemaryLabel  *qt.QLabel
 	logPane        *qt.QPlainTextEdit
 	progress       *progressDialog
+	// quitWhenDone ends the app once a task finishes, for the bare launcher
+	quitWhenDone bool
 }
 
-func runGUI(home string, logger *zap.Logger) {
+// runConfig opens the main window
+func runConfig(home string, logger *zap.Logger) {
+	g := newGUI(home, logger)
+	g.showManager()
+	qt.QApplication_Exec()
+}
+
+// runLauncher launches Studio with just the progress dialog and exits when Studio does.
+// Without Studio installed there is nothing to launch, so it opens the main window instead.
+func runLauncher(home string, logger *zap.Logger) {
+	g := newGUI(home, logger)
+	if studioInstalled(home) && installedVersion(home) != "" {
+		g.quitWhenDone = true
+		g.launch()
+	} else {
+		g.showManager()
+	}
+	qt.QApplication_Exec()
+}
+
+func (g *gui) showManager() {
+	g.refresh()
+	g.checkForUpdates()
+	g.manager.Show()
+}
+
+func newGUI(home string, logger *zap.Logger) *gui {
 	// Qt apps on GNOME look out of place without the gtk3 platform theme
 	if os.Getenv("QT_QPA_PLATFORMTHEME") == "" && strings.Contains(os.Getenv("XDG_CURRENT_DESKTOP"), "GNOME") {
 		os.Setenv("QT_QPA_PLATFORMTHEME", "gtk3")
@@ -137,12 +165,7 @@ func runGUI(home string, logger *zap.Logger) {
 	)))
 	g.buildManager()
 	g.progress = newProgressDialog(g.manager.QWidget)
-
-	g.refresh()
-	g.checkForUpdates()
-
-	g.manager.Show()
-	qt.QApplication_Exec()
+	return g
 }
 
 func (g *gui) buildManager() {
@@ -421,6 +444,9 @@ func (g *gui) runTask(title, running string, fn func(ctx context.Context, progre
 			if err != nil && !cancelled {
 				g.logger.Error(title+" failed", zap.Error(err))
 				qt.QMessageBox_Critical(g.manager.QWidget, "Everblue", fmt.Sprintf("%s failed: %v", title, err))
+			}
+			if g.quitWhenDone {
+				qt.QCoreApplication_Quit()
 			}
 		})
 	}()
