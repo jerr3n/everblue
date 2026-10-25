@@ -2,10 +2,8 @@ package main
 
 import (
 	"context"
-	"fmt"
 	"os"
 
-	"github.com/jerr3n/everblue/util"
 	"github.com/urfave/cli/v3"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
@@ -37,19 +35,21 @@ func main() {
 				Name:  "install",
 				Usage: "Install a Studio Instance",
 				Action: func(ctx context.Context, cmd *cli.Command) error {
-					setup(home, logger)
-					data, _ := util.GetVersion(logger)
-					_ = util.DownloadVersion(logger, *data, home)
-					util.RunRosemary(logger, util.RosemaryOptions{}, []string{"run", fmt.Sprintf("%s/.local/share/everblue/versions/latest/RobloxStudioInstaller.app", home)})
-					return nil
+					return installStudio(ctx, home, logger, nil)
 				},
 			},
 			{
 				Name:  "run",
 				Usage: "Run Studio",
 				Action: func(ctx context.Context, cmd *cli.Command) error {
-					// ~/.local/share/rosemary/prefixes/default/
-					util.RunRosemary(logger, util.RosemaryOptions{}, []string{"run", fmt.Sprintf("%s/.local/share/rosemary/prefixes/default/root/Applications/RobloxStudio.app", home)})
+					return runStudio(ctx, home, logger)
+				},
+			},
+			{
+				Name:  "gui",
+				Usage: "Open the Everblue window",
+				Action: func(ctx context.Context, cmd *cli.Command) error {
+					runGUI(home, logger)
 					return nil
 				},
 			},

@@ -3,6 +3,7 @@ package util
 import (
 	"archive/zip"
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -20,8 +21,16 @@ type APIVersion struct {
 	BootstrapperVersion string `json:"bootstrapperVersion"`
 }
 
-func GetVersion(logger *zap.Logger) (*APIVersion, error) {
-	resp, err := http.Get("https://clientsettingscdn.roblox.com/v2/client-version/MacStudio")
+func get(ctx context.Context, url string) (*http.Response, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, err
+	}
+	return http.DefaultClient.Do(req)
+}
+
+func GetVersion(ctx context.Context, logger *zap.Logger) (*APIVersion, error) {
+	resp, err := get(ctx, "https://clientsettingscdn.roblox.com/v2/client-version/MacStudio")
 	if err != nil {
 		logger.Error("failed to get current roblox studio version", zap.Error(err))
 		return nil, err
@@ -40,10 +49,27 @@ func GetVersion(logger *zap.Logger) (*APIVersion, error) {
 	return &data, nil
 }
 
-func DownloadVersion(logger *zap.Logger, version APIVersion, home string) error {
+// ProgressFunc reports progress for a stage of work. total is -1 when unknown.
+type ProgressFunc func(stage string, done, total int64)
+
+type progressReader struct {
+	r        io.Reader
+	done     int64
+	total    int64
+	progress ProgressFunc
+}
+
+func (p *progressReader) Read(b []byte) (int, error) {
+	n, err := p.r.Read(b)
+	p.done += int64(n)
+	p.progress("Downloading", p.done, p.total)
+	return n, err
+}
+
+func DownloadVersion(ctx context.Context, logger *zap.Logger, version APIVersion, home string, progress ProgressFunc) error {
 	// use https://setup.rbxcdn.com/mac/<version>-RobloxStudio.zip, clientversionupload is <version>
 	url := fmt.Sprintf("https://setup.rbxcdn.com/mac/%s-RobloxStudio.zip", version.ClientVersionUpload)
-	resp, err := http.Get(url)
+	resp, err := get(ctx, url)
 	if err != nil {
 		logger.Error("failed to download current roblox studio version", zap.Error(err))
 		return err
@@ -65,7 +91,11 @@ func DownloadVersion(logger *zap.Logger, version APIVersion, home string) error 
 		return err
 	}
 
-	data, err := io.ReadAll(resp.Body)
+	var body io.Reader = resp.Body
+	if progress != nil {
+		body = &progressReader{r: resp.Body, total: resp.ContentLength, progress: progress}
+	}
+	data, err := io.ReadAll(body)
 	if err != nil {
 		logger.Error("unknown error", zap.Error(err))
 		return err
@@ -76,7 +106,13 @@ func DownloadVersion(logger *zap.Logger, version APIVersion, home string) error 
 		return err
 	}
 
-	for _, f := range zr.File {
+	for i, f := range zr.File {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if progress != nil {
+			progress("Extracting", int64(i+1), int64(len(zr.File)))
+		}
 		target := filepath.Join(dest, f.Name)
 		if rel, err := filepath.Rel(dest, target); err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) {
 			logger.Error("illegal path", zap.String("path", target))

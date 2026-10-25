@@ -1,9 +1,11 @@
 package util
 
 import (
+	"context"
 	"os/exec"
 	"reflect"
 	"slices"
+	"strings"
 
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapio"
@@ -37,7 +39,7 @@ func RosemaryFlags(options RosemaryOptions) []string {
 	return flags
 }
 
-func RunRosemary(log *zap.Logger, options RosemaryOptions, xc []string) error {
+func RunRosemary(ctx context.Context, log *zap.Logger, options RosemaryOptions, xc []string) error {
 	stdout := &zapio.Writer{Log: log.Named("rosemary"), Level: zap.InfoLevel}
 	defer stdout.Close()
 
@@ -46,8 +48,17 @@ func RunRosemary(log *zap.Logger, options RosemaryOptions, xc []string) error {
 
 	flags := RosemaryFlags(options)
 
-	cmd := exec.Command("rosemary", slices.Concat(flags, xc)...)
+	cmd := exec.CommandContext(ctx, "rosemary", slices.Concat(flags, xc)...)
 	cmd.Stdout = stdout
 	cmd.Stderr = stderr
 	return cmd.Run()
+}
+
+// RosemaryVersion returns the output of rosemary --version
+func RosemaryVersion(ctx context.Context) (string, error) {
+	out, err := exec.CommandContext(ctx, "rosemary", "--version").Output()
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(out)), nil
 }
