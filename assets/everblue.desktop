@@ -1,0 +1,17 @@
+[Desktop Entry]
+Type=Application
+Name=Everblue
+GenericName=Roblox Studio Launcher
+Comment=Run Roblox Studio on Linux through rosemary
+Exec=everblue
+Icon=everblue
+Terminal=false
+Categories=Development;IDE;
+Keywords=Roblox;Studio;rosemary;
+StartupNotify=true
+StartupWMClass=everblue
+Actions=Configure;
+
+[Desktop Action Configure]
+Name=Configure Everblue
+Exec=everblue cfg

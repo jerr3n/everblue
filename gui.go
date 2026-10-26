@@ -152,6 +152,7 @@ func (g *gui) showManager() {
 
 func newGUI(home string, logger *zap.Logger) *gui {
 	qt.QCoreApplication_SetApplicationName("Everblue")
+	qt.QGuiApplication_SetDesktopFileName("everblue")
 	qt.NewQApplication(os.Args)
 	qt.QGuiApplication_SetWindowIcon(qt.NewQIcon2(svgPixmap(logoSVG, 128)))
 
