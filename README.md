@@ -26,6 +26,21 @@ and launching Studio, and a CLI for doing the same from a terminal.
   sudo apt install qt6-base-dev build-essential pkg-config
   ```
 
+## Quick install
+
+`install.sh` installs the Qt 6 runtime libraries (Arch, Fedora and
+Debian/Ubuntu), downloads the latest x86_64 release from GitHub and does the
+steps under [Installing](#installing) for you. You don't need Go or a clone of
+the repo:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/jerr3n/everblue/main/install.sh | bash
+```
+
+From a clone, run `./install.sh`. Pass `--no-deps` to skip the package manager,
+`--uninstall` to remove Everblue, and set `VERSION=<tag>` to install a specific
+release.
+
 ## Building
 
 ```sh
