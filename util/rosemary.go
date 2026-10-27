@@ -2,63 +2,75 @@ package util
 
 import (
 	"context"
-	"os/exec"
-	"reflect"
-	"slices"
-	"strings"
 
+	"github.com/jerr3n/thyme"
+	"github.com/jerr3n/thyme/cmd"
+	"github.com/jerr3n/thyme/etc"
+	"github.com/jerr3n/thyme/prefix"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapio"
 )
 
-type RosemaryOptions struct {
-	Slow        bool `rosemary:"slow"`
-	Native      bool `rosemary:"native"`
-	Emulated    bool `rosemary:"emulated"`
-	ObjcDbg     bool `rosemary:"objc-debug"`
-	NewInstance bool `rosemary:"new"`
-}
-
-// RosemaryFlags I don't use this. Someone might need to some day.
-func RosemaryFlags(options RosemaryOptions) []string {
-	flags := []string{}
-
-	v := reflect.ValueOf(options)
-	t := v.Type()
-
-	for i := 0; i < t.NumField(); i++ {
-		name, ok := t.Field(i).Tag.Lookup("rosemary")
-		if !ok || name == "" {
-			continue
-		}
-		if v.Field(i).Kind() == reflect.Bool && v.Field(i).Bool() {
-			flags = append(flags, "--"+name)
-		}
+// rosemaryIO sends rosemary's output to the logger and pins it to pfx
+func rosemaryIO(log *zap.Logger, pfx prefix.Prefix) (cmd.RunIO, func(), error) {
+	dir, err := pfx.Path()
+	if err != nil {
+		return cmd.RunIO{}, nil, err
 	}
-
-	return flags
+	stdout := &zapio.Writer{Log: log.Named("rosemary"), Level: zap.InfoLevel}
+	stderr := &zapio.Writer{Log: log.Named("rosemary"), Level: zap.ErrorLevel}
+	closeIO := func() {
+		stdout.Close()
+		stderr.Close()
+	}
+	// rosemary picks its prefix from the environment, set it so it can't differ from the one we checked
+	return cmd.RunIO{Stdout: stdout, Stderr: stderr, Env: []string{"ROSEMARY_PREFIX=" + dir}}, closeIO, nil
 }
 
-func RunRosemary(ctx context.Context, log *zap.Logger, options RosemaryOptions, xc []string) error {
-	stdout := &zapio.Writer{Log: log.Named("rosemary"), Level: zap.InfoLevel}
-	defer stdout.Close()
+// RunRosemary runs a Mach-O executable or .app bundle and its arguments in pfx
+func RunRosemary(ctx context.Context, log *zap.Logger, pfx prefix.Prefix, options cmd.RosemaryOptions, args []string) error {
+	runIO, closeIO, err := rosemaryIO(log, pfx)
+	if err != nil {
+		log.Error("failed to resolve prefix", zap.Error(err), zap.String("dir", pfx.Dir))
+		return err
+	}
+	defer closeIO()
+	if err := thyme.RunArgs(args, ctx, options, nil, runIO); err != nil {
+		log.Error("rosemary failed", zap.Error(err), zap.Strings("args", args))
+		return err
+	}
+	return nil
+}
 
-	stderr := &zapio.Writer{Log: log.Named("rosemary"), Level: zap.ErrorLevel}
-	defer stderr.Close()
-
-	flags := RosemaryFlags(options)
-
-	cmd := exec.CommandContext(ctx, "rosemary", slices.Concat(flags, xc)...)
-	cmd.Stdout = stdout
-	cmd.Stderr = stderr
-	return cmd.Run()
+// EnsurePrefix creates pfx with rosemary's defaults if it doesn't exist yet
+func EnsurePrefix(ctx context.Context, log *zap.Logger, pfx prefix.Prefix) error {
+	if pfx.Exists() {
+		return nil
+	}
+	exe, err := etc.GetRosemaryPath()
+	if err != nil {
+		log.Error("rosemary not found", zap.Error(err))
+		return err
+	}
+	runIO, closeIO, err := rosemaryIO(log, pfx)
+	if err != nil {
+		log.Error("failed to resolve prefix", zap.Error(err), zap.String("dir", pfx.Dir))
+		return err
+	}
+	defer closeIO()
+	log.Info("creating prefix", zap.String("dir", pfx.Dir))
+	if err := pfx.Create(ctx, exe, prefix.CreateOptions{}, runIO); err != nil {
+		log.Error("failed to create prefix", zap.Error(err), zap.String("dir", pfx.Dir))
+		return err
+	}
+	return nil
 }
 
 // RosemaryVersion returns the output of rosemary --version
 func RosemaryVersion(ctx context.Context) (string, error) {
-	out, err := exec.CommandContext(ctx, "rosemary", "--version").Output()
+	exe, err := etc.GetRosemaryPath()
 	if err != nil {
 		return "", err
 	}
-	return strings.TrimSpace(string(out)), nil
+	return etc.RosemaryVersion(ctx, exe, cmd.RosemaryOptions{})
 }

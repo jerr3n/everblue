@@ -118,6 +118,7 @@ type gui struct {
 	latestLabel    *qt.QLabel
 	statusLabel    *qt.QLabel
 	rosemaryLabel  *qt.QLabel
+	baseLabel      *qt.QLabel
 	logPane        *qt.QPlainTextEdit
 	progress       *progressDialog
 	// quitWhenDone ends the app once a task finishes, for the bare launcher
@@ -173,7 +174,7 @@ func (g *gui) buildManager() {
 	g.manager.SetWindowTitle("Everblue")
 	g.manager.Resize(560, 480)
 
-	prefix := fmt.Sprintf("%s/.local/share/rosemary/prefixes/default", g.home)
+	prefix := studioPrefix(g.home).Dir
 	openFolder := func(path string) func() {
 		return func() { qt.QDesktopServices_OpenUrl(qt.QUrl_FromLocalFile(path)) }
 	}
@@ -270,6 +271,8 @@ func (g *gui) buildManager() {
 	rosemaryForm := qt.NewQFormLayout2()
 	rosemaryForm.AddRow3("Version:", g.rosemaryLabel.QWidget)
 	rosemaryForm.AddRow4("Prefix:", prefixRow.QLayout)
+	g.baseLabel = newValueLabel()
+	rosemaryForm.AddRow3("Base system:", g.baseLabel.QWidget)
 	rosemaryGroup := qt.NewQGroupBox3("Rosemary")
 	rosemaryGroup.SetLayout(rosemaryForm.QLayout)
 
@@ -349,6 +352,14 @@ func (g *gui) refresh() {
 	g.statusLabel.SetText(status)
 	g.installButton.SetText(install)
 	g.installAction.SetText("&" + install)
+
+	// installing creates the prefix, so this can change along with the installed version
+	pfx := studioPrefix(g.home)
+	if err := pfx.ResolveYAML(); err != nil {
+		g.baseLabel.SetText("Not created")
+	} else {
+		g.baseLabel.SetText(fmt.Sprintf("%s %s (%s)", pfx.State.Base.Project, pfx.State.Base.Tag, pfx.State.Base.Arch))
+	}
 
 	g.runAction.SetEnabled(!g.busy && hasStudio)
 	g.runButton.SetEnabled(!g.busy && hasStudio)

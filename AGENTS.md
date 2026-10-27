@@ -19,7 +19,7 @@ itself: it downloads files, then shells out to `rosemary run <path>`.
 | `setup.go` | Creates `~/.local/share/everblue/versions`. |
 | `gui.go` | Qt 6 GUI via [miqt](https://github.com/mappu/miqt): the main window (`buildManager`), the progress dialog, and `runTask`, which runs work off the main thread. |
 | `util/fetch.go` | Roblox version lookup (`GetVersion`), download and zip extraction (`DownloadVersion`), and `ProgressFunc`. |
-| `util/rosemary.go` | Running rosemary (`RunRosemary`, `RosemaryVersion`) and turning `RosemaryOptions` into flags. |
+| `util/rosemary.go` | Running rosemary in a prefix (`RunRosemary`), creating the prefix (`EnsurePrefix`) and `RosemaryVersion`, all through [thyme](https://github.com/jerr3n/thyme). |
 | `util/util.go` | Small filesystem helpers. |
 | `assets/` | The SVG logo (embedded into the binary with `go:embed`) and the `.desktop` entry. |
 
