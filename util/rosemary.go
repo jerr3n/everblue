@@ -66,6 +66,28 @@ func EnsurePrefix(ctx context.Context, log *zap.Logger, pfx prefix.Prefix) error
 	return nil
 }
 
+// InstallBase installs the Darwin base into an existing pfx that doesn't have one.
+// rosemary prefix create keeps an existing prefix's files and only adds what's missing.
+func InstallBase(ctx context.Context, log *zap.Logger, pfx prefix.Prefix) error {
+	exe, err := etc.GetRosemaryPath()
+	if err != nil {
+		log.Error("rosemary not found", zap.Error(err))
+		return err
+	}
+	runIO, closeIO, err := rosemaryIO(log, pfx)
+	if err != nil {
+		log.Error("failed to resolve prefix", zap.Error(err), zap.String("dir", pfx.Dir))
+		return err
+	}
+	defer closeIO()
+	log.Info("installing base", zap.String("dir", pfx.Dir))
+	if err := pfx.Create(ctx, exe, prefix.CreateOptions{}, runIO); err != nil {
+		log.Error("failed to install base", zap.Error(err), zap.String("dir", pfx.Dir))
+		return err
+	}
+	return nil
+}
+
 // RosemaryVersion returns the output of rosemary --version
 func RosemaryVersion(ctx context.Context) (string, error) {
 	exe, err := etc.GetRosemaryPath()

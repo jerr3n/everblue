@@ -112,6 +112,7 @@ type gui struct {
 	runAction      *qt.QAction
 	installAction  *qt.QAction
 	checkAction    *qt.QAction
+	diagnoseAction *qt.QAction
 	runButton      *qt.QPushButton
 	installButton  *qt.QPushButton
 	installedLabel *qt.QLabel
@@ -220,6 +221,12 @@ func (g *gui) buildManager() {
 	showLog.SetShortcut(qt.NewQKeySequence2("Ctrl+L"))
 	viewMenu := menuBar.AddMenuWithTitle("&View")
 	viewMenu.AddAction(showLog)
+
+	g.diagnoseAction = qt.NewQAction3(qt.QIcon_FromTheme("system-run"), "&Run Diagnostics…")
+	g.diagnoseAction.SetShortcut(qt.NewQKeySequence2("Ctrl+D"))
+	g.diagnoseAction.OnTriggered(g.diagnose)
+	diagnosticsMenu := menuBar.AddMenuWithTitle("&Diagnostics")
+	diagnosticsMenu.AddAction(g.diagnoseAction)
 
 	helpMenu := menuBar.AddMenuWithTitle("&Help")
 	helpMenu.AddAction2(qt.QIcon_FromTheme("help-about"), "&About Everblue").OnTriggered(func() {
@@ -330,6 +337,95 @@ func (g *gui) checkForUpdates() {
 	}()
 }
 
+// diagnose runs the checks off the main thread, since finding libraries runs ldconfig
+func (g *gui) diagnose() {
+	g.diagnoseAction.SetEnabled(false)
+	g.manager.StatusBar().ShowMessage("Running diagnostics…")
+	go func() {
+		checks := diagnose(context.Background(), g.home)
+		for _, c := range checks {
+			g.logger.Info("diagnostic", zap.String("check", c.Name), zap.Bool("ok", c.OK), zap.String("detail", c.Detail))
+		}
+		mainthread.Start(func() {
+			g.diagnoseAction.SetEnabled(true)
+			g.refresh()
+			g.showDiagnostics(checks)
+		})
+	}()
+}
+
+func (g *gui) showDiagnostics(checks []check) {
+	d := qt.NewQDialog(g.manager.QWidget)
+	d.SetWindowTitle("Diagnostics")
+	d.SetAttribute(qt.WA_DeleteOnClose)
+	d.SetMinimumWidth(480)
+
+	grid := qt.NewQGridLayout2()
+	grid.SetHorizontalSpacing(12)
+	grid.SetVerticalSpacing(16)
+	for row, c := range checks {
+		iconName := "dialog-ok"
+		if !c.OK {
+			iconName = "dialog-warning"
+		}
+		icon := qt.NewQLabel2()
+		icon.SetPixmap(qt.QIcon_FromTheme(iconName).Pixmap2(32, 32))
+
+		name := qt.NewQLabel3(c.Name)
+		font := qt.NewQFont5(name.Font())
+		font.SetBold(true)
+		name.SetFont(font)
+		detail := newValueLabel()
+		detail.SetText(c.Detail)
+		detail.SetWordWrap(true)
+		text := qt.NewQVBoxLayout2()
+		text.AddWidget(name.QWidget)
+		text.AddWidget(detail.QWidget)
+
+		if c.Fixable && !c.OK {
+			fix := qt.NewQPushButton4(qt.QIcon_FromTheme("download"), "Install Base System")
+			fix.SetAutoDefault(false)
+			fix.SetEnabled(!g.busy)
+			fix.OnClicked(func() {
+				// the task's progress dialog is modal to the main window, so get out of its way
+				d.Close()
+				g.installBase()
+			})
+			fixRow := qt.NewQHBoxLayout2()
+			fixRow.AddWidget(fix.QWidget)
+			fixRow.AddStretch()
+			text.AddLayout(fixRow.QLayout)
+		}
+
+		grid.AddWidget4(icon.QWidget, row, 0, qt.AlignTop)
+		grid.AddLayout(text.QLayout, row, 1)
+	}
+	grid.SetColumnStretch(1, 1)
+
+	buttons := qt.NewQDialogButtonBox4(qt.QDialogButtonBox__Close)
+	buttons.OnRejected(d.Reject)
+	rerun := buttons.AddButton2("Run Again", qt.QDialogButtonBox__ActionRole)
+	rerun.SetIcon(qt.QIcon_FromTheme("view-refresh"))
+	rerun.OnClicked(func() {
+		d.Close()
+		g.diagnose()
+	})
+
+	layout := qt.NewQVBoxLayout2()
+	layout.AddLayout(grid.QLayout)
+	layout.AddStretch()
+	layout.AddWidget(buttons.QWidget)
+	d.SetLayout(layout.QLayout)
+	d.Show()
+}
+
+func (g *gui) installBase() {
+	g.runTask("Installing base system", "Installing base system", func(ctx context.Context, progress util.ProgressFunc, detach func()) error {
+		progress("Running rosemary prefix create", 0, -1)
+		return installBase(ctx, g.home, g.logger)
+	})
+}
+
 func (g *gui) refresh() {
 	installed := installedVersion(g.home)
 	hasStudio := studioInstalled(g.home) && installed != ""
@@ -357,6 +453,8 @@ func (g *gui) refresh() {
 	pfx := studioPrefix(g.home)
 	if err := pfx.ResolveYAML(); err != nil {
 		g.baseLabel.SetText("Not created")
+	} else if pfx.State.Base.Project == "" {
+		g.baseLabel.SetText("Not installed (see Diagnostics)")
 	} else {
 		g.baseLabel.SetText(fmt.Sprintf("%s %s (%s)", pfx.State.Base.Project, pfx.State.Base.Tag, pfx.State.Base.Arch))
 	}

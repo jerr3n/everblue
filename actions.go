@@ -2,7 +2,9 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 
@@ -54,6 +56,58 @@ func installedVersion(home string) string {
 		return ""
 	}
 	return filepath.Base(target)
+}
+
+// check is the result of one diagnostic
+type check struct {
+	Name   string
+	OK     bool
+	Detail string
+	// fixable checks can be repaired from Everblue, the rest need the user
+	Fixable bool
+}
+
+// prefixHasBase reports whether the Studio prefix has a Darwin base installed.
+// Without one the installer can't find /usr/bin/unzip and stops.
+func prefixHasBase(home string) (bool, error) {
+	pfx := studioPrefix(home)
+	if err := pfx.ResolveYAML(); err != nil {
+		return false, err
+	}
+	return pfx.State.Base.Project != "", nil
+}
+
+func diagnose(ctx context.Context, home string) []check {
+	base := check{Name: "Prefix base system"}
+	switch ok, err := prefixHasBase(home); {
+	case errors.Is(err, fs.ErrNotExist):
+		base.OK = true
+		base.Detail = "The prefix doesn't exist yet. Installing Studio creates it with a base system."
+	case err != nil:
+		base.Detail = fmt.Sprintf("Couldn't read the prefix's state: %v", err)
+	case ok:
+		base.OK = true
+		base.Detail = "The prefix has a Darwin base system installed."
+	default:
+		base.Fixable = true
+		base.Detail = "The prefix has no Darwin base system, so it's missing macOS tools such as /usr/bin/unzip. " +
+			"The Studio installer can't unpack Studio without them."
+	}
+
+	webkit := check{Name: "WebKitGTK"}
+	if path := util.FindLibrary(ctx, util.WebKitGTKSoname); path != "" {
+		webkit.OK = true
+		webkit.Detail = "Found " + path + "."
+	} else {
+		webkit.Detail = util.WebKitGTKSoname + " isn't installed, so Studio's login window stays blank. " +
+			"Install it with your package manager: webkitgtk-6.0 on Arch, webkitgtk6.0 on Fedora, " +
+			"libwebkitgtk-6.0-4 on Debian and Ubuntu."
+	}
+	return []check{base, webkit}
+}
+
+func installBase(ctx context.Context, home string, logger *zap.Logger) error {
+	return util.InstallBase(ctx, logger, studioPrefix(home))
 }
 
 func studioInstalled(home string) bool {
