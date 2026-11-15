@@ -183,6 +183,9 @@ func installVersion(ctx context.Context, home string, logger *zap.Logger, channe
 		return fmt.Errorf("%q isn't a Studio version, they look like version-0123456789abcdef", hash)
 	}
 	setup(home, logger)
+	if err := util.EnsureStudioRosemary(ctx, logger, progress); err != nil {
+		return err
+	}
 	progress("Preparing prefix", 0, -1)
 	if err := util.EnsurePrefix(ctx, logger, studioPrefix(home)); err != nil {
 		return err

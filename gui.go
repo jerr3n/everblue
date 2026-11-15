@@ -912,14 +912,28 @@ func (g *gui) showDiagnostics(checks []check) {
 		detail.SetWordWrap(true)
 		detail.SetTextInteractionFlags(qt.TextSelectableByMouse)
 		l.AddWidget(detail.QWidget)
-		if c.Fixable && !c.OK {
-			fix := button("Install Base System", "primary")
+		if c.Fix != "" && !c.OK {
+			text, action := "Install Base System", g.installBase
+			if c.Fix == fixRosemary {
+				text, action = "Install Studio Rosemary", g.installRosemary
+			}
+			fix := button(text, "primary")
+			fix.OnClicked(action)
 			fix.SetEnabled(!g.busy)
-			fix.OnClicked(g.installBase)
 			l.AddLayout(row(fix.QWidget, nil).QLayout)
 		}
 		g.diagResults.AddWidget(frame.QWidget)
 	}
+}
+
+func (g *gui) installRosemary() {
+	g.runTask("Installing rosemary", "Installed rosemary", func(ctx context.Context, progress util.ProgressFunc, detach func()) error {
+		if err := installRosemary(ctx, g.logger, progress); err != nil {
+			return err
+		}
+		mainthread.Start(g.diagnose)
+		return nil
+	})
 }
 
 func (g *gui) installBase() {
@@ -953,6 +967,7 @@ func (g *gui) checkForUpdates() {
 	go func() {
 		ctx := context.Background()
 		rosemary, rosemaryErr := util.RosemaryVersion(ctx)
+		_, studioBuild := util.RosemaryState(ctx)
 		if rosemaryErr != nil {
 			g.logger.Error("failed to get rosemary version", zap.Error(rosemaryErr))
 		}
@@ -964,6 +979,11 @@ func (g *gui) checkForUpdates() {
 			} else {
 				// the first line is the version, the rest is build details
 				first, _, _ := strings.Cut(strings.TrimSpace(rosemary), "\n")
+				if studioBuild {
+					first += "  ·  Studio build"
+				} else {
+					first += "  ·  upstream build, Everblue installs the Studio build at launch"
+				}
 				g.rosemaryValue.SetText(first)
 			}
 			g.latest = ""

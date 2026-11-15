@@ -29,6 +29,9 @@ func installStudio(ctx context.Context, home string, logger *zap.Logger, display
 		progress = func(string, int64, int64) {}
 	}
 	setup(home, logger)
+	if err := util.EnsureStudioRosemary(ctx, logger, progress); err != nil {
+		return err
+	}
 	progress("Checking version", 0, -1)
 	data, err := util.GetVersion(ctx, logger)
 	if err != nil {
@@ -54,6 +57,9 @@ func installStudio(ctx context.Context, home string, logger *zap.Logger, display
 
 func runStudio(ctx context.Context, home string, logger *zap.Logger, display displaySystem) error {
 	logger.Info("launching studio", zap.Stringer("display", display))
+	if err := util.EnsureStudioRosemary(ctx, logger, nil); err != nil {
+		return err
+	}
 	if err := applyFastFlags(home, logger); err != nil {
 		return err
 	}
@@ -70,9 +76,14 @@ type check struct {
 	Name   string
 	OK     bool
 	Detail string
-	// fixable checks can be repaired from Everblue, the rest need the user
-	Fixable bool
+	// Fix is how Everblue can repair it, if it can: fixBase or fixRosemary
+	Fix string
 }
+
+const (
+	fixBase     = "base"
+	fixRosemary = "rosemary"
+)
 
 // prefixHasBase reports whether the Studio prefix has a Darwin base installed.
 // Without one the installer can't find /usr/bin/unzip and stops.
@@ -96,7 +107,7 @@ func diagnose(ctx context.Context, home string) []check {
 		base.OK = true
 		base.Detail = "The prefix has a Darwin base system installed."
 	default:
-		base.Fixable = true
+		base.Fix = fixBase
 		base.Detail = "The prefix has no Darwin base system, so it's missing macOS tools such as /usr/bin/unzip. " +
 			"The Studio installer can't unpack Studio without them."
 	}
@@ -110,7 +121,24 @@ func diagnose(ctx context.Context, home string) []check {
 			"Install it with your package manager: webkitgtk-6.0 on Arch, webkitgtk6.0 on Fedora, " +
 			"libwebkitgtk-6.0-4 on Debian and Ubuntu."
 	}
-	return []check{base, webkit}
+	rosemary := check{Name: "Rosemary build"}
+	switch path, studio := util.RosemaryState(ctx); {
+	case studio:
+		rosemary.OK = true
+		rosemary.Detail = "Using the Roblox Studio build of rosemary at " + path + "."
+	case path == "":
+		rosemary.Fix = fixRosemary
+		rosemary.Detail = "rosemary isn't installed. Everblue installs its Studio build the next time Studio installs or launches, or now."
+	default:
+		rosemary.Fix = fixRosemary
+		rosemary.Detail = "The rosemary at " + path + " is upstream's, which Studio doesn't fully work with. " +
+			"Everblue installs its own Studio build next to it the next time Studio installs or launches, or now."
+	}
+	return []check{rosemary, base, webkit}
+}
+
+func installRosemary(ctx context.Context, logger *zap.Logger, progress util.ProgressFunc) error {
+	return util.EnsureStudioRosemary(ctx, logger, progress)
 }
 
 func installBase(ctx context.Context, home string, logger *zap.Logger) error {

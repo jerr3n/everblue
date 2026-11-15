@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/jerr3n/everblue/util"
 	"github.com/urfave/cli/v3"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
@@ -20,6 +21,7 @@ func main() {
 		logger.Fatal("home directory err", zap.Error(err))
 	}
 	logger.Debug("home directory ready", zap.String("dir", home))
+	util.UseManagedRosemary(home)
 	root := &cli.Command{
 		Name:  "everblue",
 		Usage: "Launch Roblox Studio",
