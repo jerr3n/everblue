@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -29,13 +30,36 @@ func get(ctx context.Context, url string) (*http.Response, error) {
 	return http.DefaultClient.Do(req)
 }
 
+// LiveChannel is the channel everyone gets
+const LiveChannel = "LIVE"
+
+// ErrPrivateChannel means Roblox only tells its own staff about the channel
+var ErrPrivateChannel = errors.New("this channel is private to Roblox")
+
 func GetVersion(ctx context.Context, logger *zap.Logger) (*APIVersion, error) {
-	resp, err := get(ctx, "https://clientsettingscdn.roblox.com/v2/client-version/MacStudio")
+	return GetChannelVersion(ctx, logger, LiveChannel)
+}
+
+// GetChannelVersion looks up the version of Studio a release channel is on
+func GetChannelVersion(ctx context.Context, logger *zap.Logger, channel string) (*APIVersion, error) {
+	url := "https://clientsettingscdn.roblox.com/v2/client-version/MacStudio"
+	if channel != "" && !strings.EqualFold(channel, LiveChannel) {
+		url += "/channel/" + channel
+	}
+	resp, err := get(ctx, url)
 	if err != nil {
-		logger.Error("failed to get current roblox studio version", zap.Error(err))
+		logger.Error("failed to get current roblox studio version", zap.Error(err), zap.String("channel", channel))
 		return nil, err
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
+		logger.Warn("channel is private", zap.String("channel", channel))
+		return nil, ErrPrivateChannel
+	}
+	if resp.StatusCode != http.StatusOK {
+		logger.Error("unexpected status getting version", zap.Int("status", resp.StatusCode), zap.String("channel", channel))
+		return nil, fmt.Errorf("unexpected status %d looking up channel %s", resp.StatusCode, channel)
+	}
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		logger.Error("error during reading data", zap.Error(err))
@@ -47,6 +71,55 @@ func GetVersion(ctx context.Context, logger *zap.Logger) (*APIVersion, error) {
 		return nil, err
 	}
 	return &data, nil
+}
+
+// AppZipURL is where the whole RobloxStudio.app of a version is, as opposed to the installer
+func AppZipURL(channel, hash string) string {
+	if channel == "" || strings.EqualFold(channel, LiveChannel) {
+		return fmt.Sprintf("https://setup.rbxcdn.com/mac/%s-RobloxStudioApp.zip", hash)
+	}
+	return fmt.Sprintf("https://setup.rbxcdn.com/channel/%s/mac/%s-RobloxStudioApp.zip", strings.ToLower(channel), hash)
+}
+
+// DownloadFile streams url into path, since a whole Studio is too big to hold in memory
+func DownloadFile(ctx context.Context, logger *zap.Logger, url, path string, progress ProgressFunc) error {
+	resp, err := get(ctx, url)
+	if err != nil {
+		logger.Error("failed to download", zap.Error(err), zap.String("url", url))
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusForbidden {
+		logger.Error("version not found", zap.Int("status", resp.StatusCode), zap.String("url", url))
+		return fmt.Errorf("no such Studio version on the channel (status %d)", resp.StatusCode)
+	}
+	if resp.StatusCode != http.StatusOK {
+		logger.Error("unexpected status downloading", zap.Int("status", resp.StatusCode), zap.String("url", url))
+		return fmt.Errorf("unexpected status %d downloading %s", resp.StatusCode, url)
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		logger.Error("failed to make download dir", zap.Error(err), zap.String("path", path))
+		return err
+	}
+	out, err := os.Create(path)
+	if err != nil {
+		logger.Error("failed to create download", zap.Error(err), zap.String("path", path))
+		return err
+	}
+	var body io.Reader = resp.Body
+	if progress != nil {
+		body = &progressReader{r: resp.Body, total: resp.ContentLength, progress: progress}
+	}
+	_, err = io.Copy(out, body)
+	if closeErr := out.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		os.Remove(path)
+		logger.Error("failed to download", zap.Error(err), zap.String("url", url))
+		return err
+	}
+	return nil
 }
 
 // ProgressFunc reports progress for a stage of work. total is -1 when unknown.
@@ -106,6 +179,24 @@ func DownloadVersion(ctx context.Context, logger *zap.Logger, version APIVersion
 		return err
 	}
 
+	if err := ExtractZip(ctx, logger, zr, dest, progress); err != nil {
+		return err
+	}
+	latest := fmt.Sprintf("%s/.local/share/everblue/versions/latest", home)
+	if err := os.Remove(latest); err != nil && !os.IsNotExist(err) {
+		logger.Error("error removing old latest link", zap.Error(err))
+		return err
+	}
+	err = os.Symlink(dest, latest)
+	if err != nil {
+		logger.Error("error in symlinking", zap.Error(err))
+	}
+	return nil
+}
+
+// ExtractZip unpacks zr into dest. Entries and symlinks that would land outside dest are refused, and the
+// symlinks an .app bundle carries (Frameworks/*/Versions/Current) are recreated.
+func ExtractZip(ctx context.Context, logger *zap.Logger, zr *zip.Reader, dest string, progress ProgressFunc) error {
 	for i, f := range zr.File {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -178,15 +269,6 @@ func DownloadVersion(ctx context.Context, logger *zap.Logger, version APIVersion
 			logger.Error("failed to close file", zap.Error(err), zap.String("path", target))
 			return err
 		}
-	}
-	latest := fmt.Sprintf("%s/.local/share/everblue/versions/latest", home)
-	if err := os.Remove(latest); err != nil && !os.IsNotExist(err) {
-		logger.Error("error removing old latest link", zap.Error(err))
-		return err
-	}
-	err = os.Symlink(dest, latest)
-	if err != nil {
-		logger.Error("error in symlinking", zap.Error(err))
 	}
 	return nil
 }

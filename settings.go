@@ -7,7 +7,9 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 
+	"github.com/jerr3n/everblue/util"
 	"go.uber.org/zap"
 )
 
@@ -17,8 +19,9 @@ type displaySystem string
 const (
 	// displayAsk asks before every launch
 	displayAsk displaySystem = ""
-	// displayWayland uses native Wayland windows. On Hyprland, rosemary also reads window positions over
-	// Hyprland's IPC, since Wayland never tells a program where its windows are and Qt needs that to dock panels.
+	// displayWayland uses native Wayland windows. On Hyprland and KDE Plasma, rosemary also reads and sets
+	// window positions through the compositor, since Wayland never tells a program where its windows are and
+	// Qt needs that to dock panels.
 	displayWayland displaySystem = "wayland"
 	// displayXWayland runs Studio as an X11 program, where positions are known on every desktop
 	displayXWayland displaySystem = "xwayland"
@@ -26,6 +29,20 @@ const (
 
 type settings struct {
 	Display displaySystem `json:"display,omitempty"`
+	// Accent is the UI's highlight color, accentBlue or accentRed
+	Accent string `json:"accent,omitempty"`
+	// Channel is the release channel updates come from, LIVE when empty
+	Channel string `json:"channel,omitempty"`
+	// StillLogo stops the logo spinning
+	StillLogo bool `json:"stillLogo,omitempty"`
+}
+
+// channel is the release channel to follow
+func (s settings) channel() string {
+	if s.Channel == "" {
+		return util.LiveChannel
+	}
+	return s.Channel
 }
 
 func settingsPath(home string) string {
@@ -64,9 +81,17 @@ func (s settings) save(home string, logger *zap.Logger) error {
 	return err
 }
 
-// onHyprland reports whether we're running inside a Hyprland session
-func onHyprland() bool {
-	return os.Getenv("HYPRLAND_INSTANCE_SIGNATURE") != ""
+// compositorDesktop names the desktop rosemary can ask where windows are, or "" if it can't
+func compositorDesktop() string {
+	if os.Getenv("HYPRLAND_INSTANCE_SIGNATURE") != "" {
+		return "Hyprland"
+	}
+	for _, desktop := range strings.Split(os.Getenv("XDG_CURRENT_DESKTOP"), ":") {
+		if desktop == "KDE" {
+			return "KDE Plasma"
+		}
+	}
+	return ""
 }
 
 // env is what rosemary needs set to use d. Without a choice, Wayland is what rosemary picks anyway.
@@ -74,7 +99,8 @@ func (d displaySystem) env() []string {
 	if d == displayXWayland {
 		return []string{"SDL_VIDEO_DRIVER=x11"}
 	}
-	return []string{"SDL_VIDEO_DRIVER=wayland", "ROSEMARY_HYPRLAND_IPC=1"}
+	// rosemary uses whichever compositor it finds, and nothing on any other
+	return []string{"SDL_VIDEO_DRIVER=wayland", "ROSEMARY_COMPOSITOR_IPC=1"}
 }
 
 func (d displaySystem) String() string {

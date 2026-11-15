@@ -42,22 +42,27 @@ func installStudio(ctx context.Context, home string, logger *zap.Logger, display
 		return err
 	}
 	progress("Running installer", 0, -1)
+	// the installer replaces whatever Studio is active, so keep it as a version of its own
+	if err := shelve(home, loadVersionState(home)); err != nil {
+		logger.Error("failed to put away the active studio", zap.Error(err))
+		return err
+	}
+	recordInstalled(home, logger, data.ClientVersionUpload, util.LiveChannel)
 	// the installer launches Studio when it's done, so it gets the same display system
 	return util.RunRosemary(ctx, logger, studioPrefix(home), cmd.RosemaryOptions{}, display.env(), []string{fmt.Sprintf("%s/.local/share/everblue/versions/latest/RobloxStudioInstaller.app", home)})
 }
 
 func runStudio(ctx context.Context, home string, logger *zap.Logger, display displaySystem) error {
 	logger.Info("launching studio", zap.Stringer("display", display))
+	if err := applyFastFlags(home, logger); err != nil {
+		return err
+	}
 	return util.RunRosemary(ctx, logger, studioPrefix(home), cmd.RosemaryOptions{}, display.env(), []string{studioApp(home)})
 }
 
-// installedVersion returns the version the latest symlink points to, or "" if none
+// installedVersion returns the active Studio's version hash, or "" if none
 func installedVersion(home string) string {
-	target, err := os.Readlink(fmt.Sprintf("%s/.local/share/everblue/versions/latest", home))
-	if err != nil {
-		return ""
-	}
-	return filepath.Base(target)
+	return loadVersionState(home).Active
 }
 
 // check is the result of one diagnostic
