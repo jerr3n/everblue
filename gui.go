@@ -103,10 +103,11 @@ func newProgressDialog(parent *qt.QWidget) *progressDialog {
 }
 
 type gui struct {
-	home   string
-	logger *zap.Logger
-	latest string
-	busy   bool
+	home     string
+	logger   *zap.Logger
+	latest   string
+	busy     bool
+	settings settings
 
 	manager        *qt.QMainWindow
 	runAction      *qt.QAction
@@ -139,7 +140,10 @@ func runLauncher(home string, logger *zap.Logger) {
 	g := newGUI(home, logger)
 	if studioInstalled(home) && installedVersion(home) != "" {
 		g.quitWhenDone = true
-		g.launch()
+		// cancelling the display system choice launches nothing, and there's no window to stay open for
+		if !g.launch() {
+			return
+		}
 	} else {
 		g.showManager()
 	}
@@ -158,7 +162,7 @@ func newGUI(home string, logger *zap.Logger) *gui {
 	qt.NewQApplication(os.Args)
 	qt.QGuiApplication_SetWindowIcon(qt.NewQIcon2(svgPixmap(logoSVG, 128)))
 
-	g := &gui{home: home}
+	g := &gui{home: home, settings: loadSettings(home, logger)}
 	g.logPane = qt.NewQPlainTextEdit2()
 	g.logger = zap.New(zapcore.NewTee(logger.Core(), zapcore.NewCore(
 		zapcore.NewConsoleEncoder(zap.NewDevelopmentEncoderConfig()),
@@ -182,7 +186,7 @@ func (g *gui) buildManager() {
 
 	g.runAction = qt.NewQAction3(qt.QIcon_FromTheme("media-playback-start"), "&Run Studio")
 	g.runAction.SetShortcut(qt.NewQKeySequence2("Ctrl+R"))
-	g.runAction.OnTriggered(g.launch)
+	g.runAction.OnTriggered(func() { g.launch() })
 	g.installAction = qt.NewQAction3(qt.QIcon_FromTheme("download"), "&Install Studio")
 	g.installAction.SetShortcut(qt.NewQKeySequence2("Ctrl+U"))
 	g.installAction.OnTriggered(g.install)
@@ -205,6 +209,7 @@ func (g *gui) buildManager() {
 	studioMenu.AddAction(g.installAction)
 	studioMenu.AddSeparator()
 	studioMenu.AddAction(g.checkAction)
+	studioMenu.AddAction2(qt.QIcon_FromTheme("video-display"), "&Display System…").OnTriggered(g.displaySettings)
 
 	// Log dock, hidden until asked for from the View menu
 	g.logPane.SetReadOnly(true)
@@ -288,7 +293,7 @@ func (g *gui) buildManager() {
 	g.installButton.OnClicked(g.install)
 	g.runButton = qt.NewQPushButton4(qt.QIcon_FromTheme("media-playback-start"), "Run Studio")
 	g.runButton.SetDefault(true)
-	g.runButton.OnClicked(g.launch)
+	g.runButton.OnClicked(func() { g.launch() })
 	buttons := qt.NewQHBoxLayout2()
 	buttons.AddStretch()
 	buttons.AddWidget(g.installButton.QWidget)
@@ -473,7 +478,7 @@ func (g *gui) refresh() {
 
 func (g *gui) install() {
 	g.runTask("Installing Studio", "Installer is running", func(ctx context.Context, progress util.ProgressFunc, detach func()) error {
-		return installStudio(ctx, g.home, g.logger, func(stage string, done, total int64) {
+		return installStudio(ctx, g.home, g.logger, g.installDisplay(), func(stage string, done, total int64) {
 			// the installer opens its own window, don't sit on top of it
 			if stage == "Running installer" {
 				detach()
@@ -483,12 +488,113 @@ func (g *gui) install() {
 	})
 }
 
-func (g *gui) launch() {
+// launch asks which display system to use unless one is saved, then runs Studio. It reports whether Studio was started.
+func (g *gui) launch() bool {
+	display := g.settings.Display
+	if display == displayAsk {
+		var ok bool
+		if display, ok = g.chooseDisplay(); !ok {
+			return false
+		}
+	}
 	g.runTask("Launching Studio", "Studio is running", func(ctx context.Context, progress util.ProgressFunc, detach func()) error {
-		progress(installedVersion(g.home), 0, -1)
+		progress(fmt.Sprintf("%s, %s", installedVersion(g.home), display), 0, -1)
 		detach()
-		return runStudio(ctx, g.home, g.logger)
+		return runStudio(ctx, g.home, g.logger, display)
 	})
+	return true
+}
+
+// installDisplay is the display system for the Studio the installer launches. Asking here as well as when
+// Studio is next run would ask twice for one install, so without a saved choice it's Wayland, rosemary's own default.
+func (g *gui) installDisplay() displaySystem {
+	if g.settings.Display == displayAsk {
+		return displayWayland
+	}
+	return g.settings.Display
+}
+
+// displayOptions builds a radio button with an explanation under it for each display system
+func displayOptions(layout *qt.QVBoxLayout, options []displaySystem, selected displaySystem) *qt.QButtonGroup {
+	describe := map[displaySystem]string{
+		displayAsk: "Choose before Studio opens each time.",
+		displayWayland: "Native Wayland windows. Wayland doesn't tell programs where their windows are, " +
+			"so dragging a floating panel back into Studio can't work on most desktops.",
+		displayXWayland: "Runs Studio as an X11 program. Window positions are known on every desktop, " +
+			"so panels can be docked by dragging, but X11 programs can look and behave worse on Wayland desktops.",
+	}
+	if onHyprland() {
+		describe[displayWayland] = "Native Wayland windows. On Hyprland, rosemary reads window positions from " +
+			"Hyprland so floating panels can be dragged back into Studio."
+	}
+	group := qt.NewQButtonGroup()
+	for i, option := range options {
+		radio := qt.NewQRadioButton3(option.String())
+		radio.SetChecked(option == selected)
+		group.AddButton2(radio.QAbstractButton, i)
+		detail := qt.NewQLabel3(describe[option])
+		detail.SetWordWrap(true)
+		// line the explanation up with the radio button's text
+		detail.SetIndent(radio.SizeHint().Height() + 4)
+		layout.AddWidget(radio.QWidget)
+		layout.AddWidget(detail.QWidget)
+		layout.AddSpacing(6)
+	}
+	return group
+}
+
+// chooseDisplay asks which display system to launch Studio with, and saves it when asked to remember
+func (g *gui) chooseDisplay() (displaySystem, bool) {
+	d := qt.NewQDialog(g.manager.QWidget)
+	d.SetWindowTitle("Launch Studio")
+	d.SetMinimumWidth(460)
+	layout := qt.NewQVBoxLayout2()
+	layout.AddWidget(qt.NewQLabel3("Which display system should Studio use?").QWidget)
+	layout.AddSpacing(6)
+	options := []displaySystem{displayWayland, displayXWayland}
+	group := displayOptions(layout, options, displayWayland)
+	remember := qt.NewQCheckBox3("Remember my choice")
+	remember.SetToolTip("Change it later from Studio > Display System in the Everblue window.")
+	layout.AddWidget(remember.QWidget)
+	buttons := qt.NewQDialogButtonBox4(qt.QDialogButtonBox__Ok | qt.QDialogButtonBox__Cancel)
+	launch := buttons.Button(qt.QDialogButtonBox__Ok)
+	launch.SetText("Launch")
+	launch.SetIcon(qt.QIcon_FromTheme("media-playback-start"))
+	buttons.OnAccepted(d.Accept)
+	buttons.OnRejected(d.Reject)
+	layout.AddWidget(buttons.QWidget)
+	d.SetLayout(layout.QLayout)
+	if d.Exec() != int(qt.QDialog__Accepted) {
+		return displayAsk, false
+	}
+	choice := options[group.CheckedId()]
+	if remember.IsChecked() {
+		g.settings.Display = choice
+		g.settings.save(g.home, g.logger)
+	}
+	return choice, true
+}
+
+// displaySettings changes or forgets the saved display system
+func (g *gui) displaySettings() {
+	d := qt.NewQDialog(g.manager.QWidget)
+	d.SetWindowTitle("Display System")
+	d.SetMinimumWidth(460)
+	layout := qt.NewQVBoxLayout2()
+	options := []displaySystem{displayAsk, displayWayland, displayXWayland}
+	group := displayOptions(layout, options, g.settings.Display)
+	layout.AddWidget(qt.NewQLabel3("Takes effect the next time Studio starts.").QWidget)
+	buttons := qt.NewQDialogButtonBox4(qt.QDialogButtonBox__Save | qt.QDialogButtonBox__Cancel)
+	buttons.OnAccepted(d.Accept)
+	buttons.OnRejected(d.Reject)
+	layout.AddWidget(buttons.QWidget)
+	d.SetLayout(layout.QLayout)
+	if d.Exec() != int(qt.QDialog__Accepted) {
+		return
+	}
+	g.settings.Display = options[group.CheckedId()]
+	g.settings.save(g.home, g.logger)
+	g.refresh()
 }
 
 // runTask shows the progress dialog while fn runs in a goroutine. Once fn calls detach and keeps

@@ -27,14 +27,15 @@ func rosemaryIO(log *zap.Logger, pfx prefix.Prefix) (cmd.RunIO, func(), error) {
 	return cmd.RunIO{Stdout: stdout, Stderr: stderr, Env: []string{"ROSEMARY_PREFIX=" + dir}}, closeIO, nil
 }
 
-// RunRosemary runs a Mach-O executable or .app bundle and its arguments in pfx
-func RunRosemary(ctx context.Context, log *zap.Logger, pfx prefix.Prefix, options cmd.RosemaryOptions, args []string) error {
+// RunRosemary runs a Mach-O executable or .app bundle and its arguments in pfx, with env added to ours
+func RunRosemary(ctx context.Context, log *zap.Logger, pfx prefix.Prefix, options cmd.RosemaryOptions, env []string, args []string) error {
 	runIO, closeIO, err := rosemaryIO(log, pfx)
 	if err != nil {
 		log.Error("failed to resolve prefix", zap.Error(err), zap.String("dir", pfx.Dir))
 		return err
 	}
 	defer closeIO()
+	runIO.Env = append(runIO.Env, env...)
 	if err := thyme.RunArgs(args, ctx, options, nil, runIO); err != nil {
 		log.Error("rosemary failed", zap.Error(err), zap.Strings("args", args))
 		return err

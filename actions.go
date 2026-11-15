@@ -24,7 +24,7 @@ func studioApp(home string) string {
 	return filepath.Join(studioPrefix(home).Dir, "root/Applications/RobloxStudio.app")
 }
 
-func installStudio(ctx context.Context, home string, logger *zap.Logger, progress util.ProgressFunc) error {
+func installStudio(ctx context.Context, home string, logger *zap.Logger, display displaySystem, progress util.ProgressFunc) error {
 	if progress == nil {
 		progress = func(string, int64, int64) {}
 	}
@@ -42,11 +42,13 @@ func installStudio(ctx context.Context, home string, logger *zap.Logger, progres
 		return err
 	}
 	progress("Running installer", 0, -1)
-	return util.RunRosemary(ctx, logger, studioPrefix(home), cmd.RosemaryOptions{}, []string{fmt.Sprintf("%s/.local/share/everblue/versions/latest/RobloxStudioInstaller.app", home)})
+	// the installer launches Studio when it's done, so it gets the same display system
+	return util.RunRosemary(ctx, logger, studioPrefix(home), cmd.RosemaryOptions{}, display.env(), []string{fmt.Sprintf("%s/.local/share/everblue/versions/latest/RobloxStudioInstaller.app", home)})
 }
 
-func runStudio(ctx context.Context, home string, logger *zap.Logger) error {
-	return util.RunRosemary(ctx, logger, studioPrefix(home), cmd.RosemaryOptions{}, []string{studioApp(home)})
+func runStudio(ctx context.Context, home string, logger *zap.Logger, display displaySystem) error {
+	logger.Info("launching studio", zap.Stringer("display", display))
+	return util.RunRosemary(ctx, logger, studioPrefix(home), cmd.RosemaryOptions{}, display.env(), []string{studioApp(home)})
 }
 
 // installedVersion returns the version the latest symlink points to, or "" if none
