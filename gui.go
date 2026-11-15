@@ -80,12 +80,16 @@ func card(style string) (*qt.QFrame, *qt.QVBoxLayout) {
 	return frame, layout
 }
 
+const pageMaxWidth = 640
+
 // page is one of the sidebar's destinations, with its title and what it's for
 func page(title, subtitle string) (*qt.QWidget, *qt.QVBoxLayout) {
 	w := qt.NewQWidget2()
 	setName(w.QObject, "page")
+	// a tiling window manager can make the window as wide as it likes, so the page itself stays narrow
+	w.SetMaximumWidth(pageMaxWidth)
 	layout := qt.NewQVBoxLayout2()
-	layout.SetContentsMargins(36, 32, 36, 28)
+	layout.SetContentsMargins(26, 26, 26, 22)
 	layout.SetSpacing(16)
 	layout.AddWidget(label(title, "h1").QWidget)
 	if subtitle != "" {
@@ -104,6 +108,8 @@ func scrolled(w *qt.QWidget) *qt.QWidget {
 	scroll.SetWidget(w)
 	scroll.SetWidgetResizable(true)
 	scroll.SetFrameShape(qt.QFrame__NoFrame)
+	// pages fit the width and only scroll down
+	scroll.SetHorizontalScrollBarPolicy(qt.ScrollBarAlwaysOff)
 	return scroll.QWidget
 }
 
@@ -191,6 +197,11 @@ type gui struct {
 	runAction   *qt.QAction
 	checkAction *qt.QAction
 
+	// The compact layout's header bar and display choice
+	headerTitle *qt.QLabel
+	backButton  *qt.QPushButton
+	displayBox  *qt.QComboBox
+
 	// Home
 	heroTitle     *qt.QLabel
 	heroDetail    *qt.QLabel
@@ -266,7 +277,74 @@ func runLauncher(home string, logger *zap.Logger) {
 func (g *gui) showManager() {
 	g.refresh()
 	g.checkForUpdates()
+	floatOnHyprland(g.manager.QWidget)
 	g.manager.Show()
+}
+
+// floatOnHyprland makes Hyprland float the window instead of tiling it. Hyprland floats a window whose size
+// can't change when it first appears, so it starts out fixed at its size and becomes resizable once it's up.
+func floatOnHyprland(w *qt.QWidget) {
+	if os.Getenv("HYPRLAND_INSTANCE_SIGNATURE") == "" {
+		return
+	}
+	min, max := w.MinimumSize(), w.MaximumSize()
+	w.SetFixedSize(w.Size())
+	go func() {
+		time.Sleep(500 * time.Millisecond)
+		mainthread.Start(func() {
+			w.SetMinimumSize(min)
+			w.SetMaximumSize(max)
+		})
+	}()
+}
+
+// rebuild replaces the window with a new one, after a change to the layout or theme that the built widgets
+// can't follow
+func (g *gui) rebuild() {
+	if g.busy {
+		g.setStatus("Reopen Everblue to see the change")
+		return
+	}
+	old := g.manager
+	// the log pane outlives the window, and would go with it
+	g.logPane.SetParent(nil)
+	*g = gui{home: g.home, logger: g.logger, latest: g.latest, settings: g.settings, app: g.app,
+		logPane: g.logPane, quitWhenDone: g.quitWhenDone}
+	g.buildManager()
+	g.progress = newProgressDialog(g.manager.QWidget, themeAccent(g.settings), g.settings.StillLogo)
+	g.showManager()
+	old.Hide()
+	old.DeleteLater()
+}
+
+func (g *gui) setClassic(on bool) {
+	g.settings.Classic = on
+	g.settings.save(g.home, g.logger)
+	applyTheme(g.app, g.home, g.settings)
+	// the switch that called this belongs to the window being replaced
+	mainthread.Start(g.rebuild)
+}
+
+var (
+	themeKeys  = []string{themeEverblue, themeColors, themePlain}
+	themeNames = []string{"Everblue", "System Colors", "System Style"}
+)
+
+func themeIndex(theme string) int {
+	for i, key := range themeKeys {
+		if key == theme {
+			return i
+		}
+	}
+	return 0
+}
+
+func (g *gui) setTheme(theme string) {
+	g.settings.Theme = theme
+	g.settings.save(g.home, g.logger)
+	applyTheme(g.app, g.home, g.settings)
+	// icons and the logo are drawn in the theme's colors when the window is built
+	mainthread.Start(g.rebuild)
 }
 
 func newGUI(home string, logger *zap.Logger) *gui {
@@ -275,7 +353,7 @@ func newGUI(home string, logger *zap.Logger) *gui {
 	g := &gui{home: home, settings: loadSettings(home, logger)}
 	g.app = qt.NewQApplication(os.Args)
 	qt.QGuiApplication_SetWindowIcon(qt.NewQIcon2(svgPixmap(logoSVG, 128)))
-	applyTheme(g.app, g.home, g.settings.Accent)
+	applyTheme(g.app, g.home, g.settings)
 
 	g.logPane = qt.NewQPlainTextEdit2()
 	g.logger = zap.New(zapcore.NewTee(logger.Core(), zapcore.NewCore(
@@ -284,7 +362,7 @@ func newGUI(home string, logger *zap.Logger) *gui {
 		zap.DebugLevel,
 	)))
 	g.buildManager()
-	g.progress = newProgressDialog(g.manager.QWidget, accentFor(g.settings.Accent), g.settings.StillLogo)
+	g.progress = newProgressDialog(g.manager.QWidget, themeAccent(g.settings), g.settings.StillLogo)
 	return g
 }
 
@@ -299,8 +377,38 @@ func (g *gui) openFolder(path string) func() {
 func (g *gui) buildManager() {
 	g.manager = qt.NewQMainWindow2()
 	g.manager.SetWindowTitle("Everblue")
-	g.manager.Resize(1040, 680)
-	g.manager.SetMinimumSize2(900, 600)
+	if g.settings.Classic {
+		g.buildClassic()
+	} else {
+		g.buildCompact()
+	}
+
+	// Shortcuts without a menu bar to show them in
+	shortcut := func(keys string, fn func()) *qt.QAction {
+		action := qt.NewQAction2("")
+		action.SetShortcut(qt.NewQKeySequence2(keys))
+		action.OnTriggered(fn)
+		g.manager.AddAction(action)
+		return action
+	}
+	g.runAction = shortcut("Ctrl+R", func() { g.launch() })
+	shortcut("Ctrl+U", g.install)
+	g.checkAction = shortcut("F5", g.checkForUpdates)
+	shortcut("Ctrl+D", func() { g.showPage(pageDiagnostics); g.diagnose() })
+	shortcut("Ctrl+L", func() { g.showPage(pageLogs) })
+	shortcut("Alt+Left", func() { g.showPage(pageHome) })
+	quit := qt.NewQAction2("")
+	quit.SetShortcut(qt.NewQKeySequence6(qt.QKeySequence__Quit))
+	quit.OnTriggered(func() { g.manager.Close() })
+	g.manager.AddAction(quit)
+
+	g.showPage(pageHome)
+}
+
+// buildClassic is the sidebar window: the pages on the right, chosen from the sidebar on the left
+func (g *gui) buildClassic() {
+	g.manager.Resize(680, 640)
+	g.manager.SetMinimumSize2(560, 520)
 
 	g.pages = qt.NewQStackedWidget2()
 	g.pages.AddWidget(scrolled(g.buildHome()))
@@ -319,42 +427,22 @@ func (g *gui) buildManager() {
 	central.SetLayout(body.QLayout)
 	g.manager.SetCentralWidget(central)
 
-	// The logo sits over the bottom right corner of the home page, out of the way of everything else
-	const logoSize = 190
-	g.logo = newSpinningLogo(central, accentFor(g.settings.Accent), g.settings.StillLogo)
+	// The logo, when shown, sits over the bottom right corner of the home page, out of the way of everything else
+	const logoSize = 170
+	g.logo = newSpinningLogo(central, themeAccent(g.settings), g.settings.StillLogo)
 	g.logo.SetFixedSize2(logoSize, logoSize)
 	central.OnResizeEvent(func(super func(*qt.QResizeEvent), e *qt.QResizeEvent) {
 		super(e)
 		g.logo.Move(central.Width()-logoSize-28, central.Height()-logoSize-22)
 		g.logo.Raise()
 	})
-
-	// Shortcuts without a menu bar to show them in
-	shortcut := func(keys string, fn func()) *qt.QAction {
-		action := qt.NewQAction2("")
-		action.SetShortcut(qt.NewQKeySequence2(keys))
-		action.OnTriggered(fn)
-		g.manager.AddAction(action)
-		return action
-	}
-	g.runAction = shortcut("Ctrl+R", func() { g.launch() })
-	shortcut("Ctrl+U", g.install)
-	g.checkAction = shortcut("F5", g.checkForUpdates)
-	shortcut("Ctrl+D", func() { g.showPage(pageDiagnostics); g.diagnose() })
-	shortcut("Ctrl+L", func() { g.showPage(pageLogs) })
-	quit := qt.NewQAction2("")
-	quit.SetShortcut(qt.NewQKeySequence6(qt.QKeySequence__Quit))
-	quit.OnTriggered(func() { g.manager.Close() })
-	g.manager.AddAction(quit)
-
-	g.showPage(pageHome)
 }
 
 func (g *gui) buildSidebar() *qt.QWidget {
 	sidebar := qt.NewQWidget2()
 	setName(sidebar.QObject, "sidebar")
 	sidebar.SetAttribute(qt.WA_StyledBackground)
-	sidebar.SetFixedWidth(232)
+	sidebar.SetFixedWidth(200)
 	layout := qt.NewQVBoxLayout2()
 	layout.SetContentsMargins(16, 22, 16, 18)
 	layout.SetSpacing(4)
@@ -393,11 +481,18 @@ func (g *gui) buildSidebar() *qt.QWidget {
 }
 
 func (g *gui) showPage(index int) {
-	g.pages.SetCurrentIndex(index)
-	g.nav[index].SetChecked(true)
-	if g.logo != nil {
-		g.logo.SetVisible(index == pageHome)
+	if !g.settings.Classic && index == pageSettings {
+		index = pageHome
 	}
+	g.pages.SetCurrentIndex(index)
+	if index < len(g.nav) {
+		g.nav[index].SetChecked(true)
+	}
+	if g.headerTitle != nil {
+		g.headerTitle.SetText(pageTitles[index])
+		g.backButton.SetVisible(index != pageHome)
+	}
+	g.showCorner()
 	switch index {
 	case pageVersions:
 		g.refreshVersions()
@@ -421,6 +516,7 @@ func (g *gui) buildHome() *qt.QWidget {
 	g.statusPill = label("", "pillGood")
 	heroLayout.AddLayout(row(label("ROBLOX STUDIO", "caption").QWidget, nil, g.statusPill.QWidget).QLayout)
 	g.heroTitle = label("", "h1")
+	g.heroTitle.SetWordWrap(true)
 	heroLayout.AddWidget(g.heroTitle.QWidget)
 	g.heroDetail = label("", "muted")
 	heroLayout.AddWidget(g.heroDetail.QWidget)
@@ -451,11 +547,7 @@ func (g *gui) buildHome() *qt.QWidget {
 	g.baseValue = tile("ROSEMARY BASE SYSTEM", 1, 1)
 	infoWidget := qt.NewQWidget2()
 	infoWidget.SetLayout(info.QLayout)
-	// leave the right of the page to the logo
-	infoRow := qt.NewQHBoxLayout2()
-	infoRow.AddWidget2(infoWidget, 3)
-	infoRow.AddStretchWithStretch(1)
-	layout.AddLayout(infoRow.QLayout)
+	layout.AddWidget(infoWidget)
 	layout.AddStretch()
 	return w
 }
@@ -487,6 +579,8 @@ func (g *gui) buildVersions() *qt.QWidget {
 	})
 	channelLayout.AddLayout(row(g.channelBox.QWidget, useChannel.QWidget, nil).QLayout)
 	g.channelLatest = label("", "muted")
+	// the version hash is long, and would otherwise set the page's width
+	g.channelLatest.SetWordWrap(true)
 	g.installLatest = button("Install Latest", "primary")
 	g.installLatest.OnClicked(func() { g.installHash(g.latest) })
 	channelLayout.AddLayout(row(g.channelLatest.QWidget, nil, g.installLatest.QWidget).QLayout)
@@ -650,13 +744,8 @@ func (g *gui) buildFlags() *qt.QWidget {
 			qt.QMessageBox_Critical(g.manager.QWidget, "Everblue", err.Error())
 		}
 	})
-	toolbar := qt.NewQHBoxLayout2()
-	toolbar.SetSpacing(10)
-	toolbar.AddWidget2(g.flagSearch.QWidget, 1)
-	for _, b := range []*qt.QPushButton{paste, importFile, export, remove, add} {
-		toolbar.AddWidget(b.QWidget)
-	}
-	layout.AddLayout(toolbar.QLayout)
+	layout.AddWidget(g.flagSearch.QWidget)
+	layout.AddLayout(row(paste.QWidget, importFile.QWidget, export.QWidget, nil, remove.QWidget, add.QWidget).QLayout)
 
 	g.flagTable = qt.NewQTableWidget3(0, 2)
 	g.flagTable.SetHorizontalHeaderLabels([]string{"FLAG", "VALUE"})
@@ -797,7 +886,7 @@ func (g *gui) buildSettings() *qt.QWidget {
 		a := accentFor(choice.key)
 		swatch := button("", "swatch")
 		swatch.SetCheckable(true)
-		swatch.SetStyleSheet(fmt.Sprintf("QPushButton#swatch { background: %s; border: 3px solid %s; } QPushButton#swatch:checked { border-color: #ffffff; }", a.base, colorCard))
+		swatch.SetStyleSheet(fmt.Sprintf("QPushButton#swatch { background: %s; border: 3px solid %s; } QPushButton#swatch:checked { border-color: #ffffff; }", a.base, classicColors.card))
 		key := choice.key
 		swatch.OnClicked(func() { g.setAccent(key) })
 		g.swatches[key] = swatch
@@ -808,15 +897,37 @@ func (g *gui) buildSettings() *qt.QWidget {
 	swatchRow.AddStretch()
 	lookLayout.AddLayout(swatchRow.QLayout)
 	g.swatches[g.settings.accentName()].SetChecked(true)
+	for _, swatch := range g.swatches {
+		swatch.SetEnabled(g.settings.Theme == themeEverblue)
+	}
 	animate := qt.NewQCheckBox3("Spin the logo")
 	animate.SetChecked(!g.settings.StillLogo)
 	animate.OnToggled(func(on bool) {
 		g.settings.StillLogo = !on
 		g.settings.save(g.home, g.logger)
-		g.logo.setStill(!on)
+		if g.logo != nil {
+			g.logo.setStill(!on)
+		}
 		g.progress.logo.setStill(!on)
 	})
 	lookLayout.AddWidget(animate.QWidget)
+	showLogo := qt.NewQCheckBox3("Show the Roblox logo on the home page")
+	showLogo.SetChecked(g.settings.ShowLogo)
+	showLogo.OnToggled(func(on bool) {
+		g.settings.ShowLogo = on
+		g.settings.save(g.home, g.logger)
+		g.showCorner()
+	})
+	lookLayout.AddWidget(showLogo.QWidget)
+	theme := qt.NewQComboBox2()
+	theme.AddItems(themeNames)
+	theme.SetCurrentIndex(themeIndex(g.settings.Theme))
+	theme.OnActivated(func(i int) { g.setTheme(themeKeys[i]) })
+	lookLayout.AddLayout(row(label("Theme", "").QWidget, theme.QWidget, nil).QLayout)
+	classic := qt.NewQCheckBox3("Use the classic sidebar layout")
+	classic.SetChecked(true)
+	classic.OnToggled(g.setClassic)
+	lookLayout.AddWidget(classic.QWidget)
 	layout.AddWidget(look.QWidget)
 
 	display, displayLayout := card("card")
@@ -833,12 +944,14 @@ func (g *gui) buildSettings() *qt.QWidget {
 	folders, foldersLayout := card("card")
 	foldersLayout.AddWidget(label("Rosemary", "h2").QWidget)
 	g.rosemaryValue = label("Checking…", "muted")
+	g.rosemaryValue.SetWordWrap(true)
 	prefix := studioPrefix(g.home).Dir
 	openData := button("Everblue Folder", "")
 	openData.OnClicked(g.openFolder(fmt.Sprintf("%s/.local/share/everblue", g.home)))
 	openPrefix := button("Prefix", "")
 	openPrefix.OnClicked(g.openFolder(prefix))
-	foldersLayout.AddLayout(row(g.rosemaryValue.QWidget, nil, openData.QWidget, openPrefix.QWidget).QLayout)
+	foldersLayout.AddWidget(g.rosemaryValue.QWidget)
+	foldersLayout.AddLayout(row(openData.QWidget, openPrefix.QWidget, nil).QLayout)
 	foldersLayout.AddWidget(label(strings.Replace(prefix, g.home, "~", 1), "mono").QWidget)
 	layout.AddWidget(folders.QWidget)
 	layout.AddStretch()
@@ -858,9 +971,18 @@ func (g *gui) setAccent(key string) {
 	for name, swatch := range g.swatches {
 		swatch.SetChecked(name == key)
 	}
-	applyTheme(g.app, g.home, key)
-	g.logo.setAccent(accentFor(key))
-	g.progress.logo.setAccent(accentFor(key))
+	applyTheme(g.app, g.home, g.settings)
+	if g.logo != nil {
+		g.logo.setAccent(themeAccent(g.settings))
+	}
+	g.progress.logo.setAccent(themeAccent(g.settings))
+}
+
+// showCorner shows the logo on the home page when it's turned on
+func (g *gui) showCorner() {
+	if g.logo != nil {
+		g.logo.SetVisible(g.settings.ShowLogo && g.pages.CurrentIndex() == pageHome)
+	}
 }
 
 // --- Diagnostics ---
@@ -1035,7 +1157,17 @@ func (g *gui) refresh() {
 		g.heroDetail.SetText("Everblue installs Studio into a rosemary prefix and keeps it up to date.")
 	}
 	g.channelValue.SetText(g.settings.channel())
-	g.displayValue.SetText(g.settings.Display.String())
+	if g.displayValue != nil {
+		g.displayValue.SetText(g.settings.Display.String())
+	}
+	if g.displayBox != nil {
+		// the launch dialog can remember a choice, so follow it
+		for i, d := range []displaySystem{displayAsk, displayWayland, displayXWayland} {
+			if d == g.settings.Display {
+				g.displayBox.SetCurrentIndex(i)
+			}
+		}
+	}
 
 	// installing creates the prefix, so this can change along with the installed version
 	pfx := studioPrefix(g.home)

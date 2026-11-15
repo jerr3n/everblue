@@ -17,8 +17,9 @@ itself: it downloads files, then shells out to `rosemary run <path>`.
 | `main.go` | CLI entry point ([urfave/cli v3](https://github.com/urfave/cli)) and zap logger setup. The bare command runs `runLauncher`. |
 | `actions.go` | Core operations shared by the CLI and GUI: `installStudio`, `runStudio`, `installedVersion`, `studioInstalled`, `studioApp`. |
 | `setup.go` | Creates `~/.local/share/everblue/versions`. |
-| `gui.go` | Qt 6 GUI via [miqt](https://github.com/mappu/miqt): the sidebar window and its pages (`buildManager`), the progress dialog, and `runTask`, which runs work off the main thread. |
-| `theme.go` | The dark theme: palette, stylesheet and accent colors. |
+| `gui.go` | Qt 6 GUI via [miqt](https://github.com/mappu/miqt): the window (`buildManager`), the classic sidebar layout and its pages, the progress dialog, and `runTask`, which runs work off the main thread. |
+| `compact.go` | The compact layout (the default): one column of grouped rows under a header bar, GNOME-style. It reuses the classic pages for Versions, Fast Flags, Diagnostics and Logs. |
+| `theme.go` | The dark theme: each layout's grays, the stylesheet and accent colors, and the system theme mode. |
 | `logo3d.go` | The spinning 3D logo. |
 | `versions.go` | Installed versions, switching between them, and installing exact versions or release channels. |
 | `fflags.go` | Fast flags: storing them and writing them into Studio at launch. |
@@ -64,7 +65,13 @@ gofmt -l .
   on every launch, so updates and version switches don't lose them.
 - **Everblue's own look.** The GUI is dark and themed by `theme.go`: Fusion,
   a dark palette, and one stylesheet built around an accent (Roblox blue, or
-  red as a setting). Style widgets through object names the stylesheet knows
+  red as a setting). There are two layouts, compact (default) and classic
+  (`settings.Classic`), and three themes (`settings.Theme`): Everblue's
+  colors, the desktop's colors in Everblue's look (taken from the Qt palette
+  before Everblue replaces it), and the desktop's plain Qt style. Switching layout or theme rebuilds the window
+  (`gui.rebuild`), so keep state that must survive in the fields it copies.
+  On Hyprland the window starts fixed-size so Hyprland floats it
+  (`floatOnHyprland`). Style widgets through object names the stylesheet knows
   (`setName`) rather than per-widget stylesheets or desktop themes. The
   spinning logo (`logo3d.go`) is drawn with QPainter and stops its timer while
   hidden; keep it cheap.

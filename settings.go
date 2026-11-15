@@ -35,7 +35,22 @@ type settings struct {
 	Channel string `json:"channel,omitempty"`
 	// StillLogo stops the logo spinning
 	StillLogo bool `json:"stillLogo,omitempty"`
+	// Theme is Everblue's own colors (themeEverblue), the desktop's colors in Everblue's look (themeColors),
+	// or the desktop's own Qt style and colors (themePlain)
+	Theme string `json:"theme,omitempty"`
+	// SystemTheme is the old switch for themePlain, only read so that choice carries over
+	SystemTheme bool `json:"systemTheme,omitempty"`
+	// ShowLogo puts the spinning logo in the home page's bottom right corner
+	ShowLogo bool `json:"showLogo,omitempty"`
+	// Classic is the older sidebar window instead of the compact single column one
+	Classic bool `json:"classic,omitempty"`
 }
+
+const (
+	themeEverblue = ""
+	themeColors   = "colors"
+	themePlain    = "plain"
+)
 
 // channel is the release channel to follow
 func (s settings) channel() string {
@@ -62,6 +77,9 @@ func loadSettings(home string, logger *zap.Logger) settings {
 	if err != nil {
 		logger.Error("failed to read settings, using defaults", zap.Error(err), zap.String("path", settingsPath(home)))
 		return settings{}
+	}
+	if s.SystemTheme {
+		s.Theme, s.SystemTheme = themePlain, false
 	}
 	return s
 }
@@ -106,7 +124,7 @@ func (d displaySystem) env() []string {
 func (d displaySystem) String() string {
 	switch d {
 	case displayWayland:
-		return "Wayland"
+		return "Wayland (recommended)"
 	case displayXWayland:
 		return "XWayland"
 	}
