@@ -3,15 +3,22 @@
 Everblue runs Roblox Studio on Linux. It downloads the macOS build of Studio
 from Roblox, runs its installer through
 [rosemary](https://github.com/microlift/rosemary), and then launches Studio
-from the rosemary prefix. It has a small Qt 6 window for installing, updating
-and launching Studio, and a CLI for doing the same from a terminal.
+from the rosemary prefix. Its Qt 6 window installs, updates and launches
+Studio, keeps several Studio versions and release channels, and manages fast
+flags; a CLI does the basics from a terminal.
 
 ## Requirements
 
-- **[rosemary](https://github.com/microlift/rosemary)** on your `PATH`.
-  rosemary is what actually runs the macOS `.app` bundles. Everblue uses its
-  default prefix at
-  `~/.local/share/rosemary/prefixes/default`.
+- **The Roblox Studio build of rosemary**, from
+  [rosemary-studio](https://github.com/3XPLwastaken/rosemary-studio), an
+  experimental fork of [rosemary](https://github.com/microlift/rosemary) with
+  the fixes Studio needs. rosemary is what actually runs the macOS `.app`
+  bundles. You don't need to install it yourself: if the rosemary on your
+  `PATH` isn't the Studio build (its `rosemary --version` says
+  `variant: studio`), or there's none, Everblue downloads the Studio build into
+  `~/.local/share/everblue/rosemary/` before installing or launching Studio and
+  uses that copy, leaving any other rosemary alone. Everblue uses rosemary's
+  default prefix at `~/.local/share/rosemary/prefixes/default`.
 - **Go 1.27** or newer.
 - **Qt 6** development files, a C++ compiler and `pkg-config`, for the
   [miqt](https://github.com/mappu/miqt) bindings. On Fedora:

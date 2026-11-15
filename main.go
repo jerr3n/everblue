@@ -2,8 +2,10 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"os"
 
+	"github.com/jerr3n/everblue/util"
 	"github.com/urfave/cli/v3"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
@@ -19,6 +21,7 @@ func main() {
 		logger.Fatal("home directory err", zap.Error(err))
 	}
 	logger.Debug("home directory ready", zap.String("dir", home))
+	util.UseManagedRosemary(home)
 	root := &cli.Command{
 		Name:  "everblue",
 		Usage: "Launch Roblox Studio",
@@ -39,15 +42,25 @@ func main() {
 			{
 				Name:  "install",
 				Usage: "Install a Studio Instance",
+				Flags: []cli.Flag{displayFlag},
 				Action: func(ctx context.Context, cmd *cli.Command) error {
-					return installStudio(ctx, home, logger, nil)
+					display, err := cliDisplay(cmd, home, logger)
+					if err != nil {
+						return err
+					}
+					return installStudio(ctx, home, logger, display, nil)
 				},
 			},
 			{
 				Name:  "run",
 				Usage: "Run Studio",
+				Flags: []cli.Flag{displayFlag},
 				Action: func(ctx context.Context, cmd *cli.Command) error {
-					return runStudio(ctx, home, logger)
+					display, err := cliDisplay(cmd, home, logger)
+					if err != nil {
+						return err
+					}
+					return runStudio(ctx, home, logger, display)
 				},
 			},
 			{
@@ -64,4 +77,24 @@ func main() {
 	if err := root.Run(context.Background(), os.Args); err != nil {
 		logger.Fatal("error", zap.Error(err))
 	}
+}
+
+var displayFlag = &cli.StringFlag{
+	Name:  "display",
+	Usage: "display system for Studio: wayland or xwayland (default: the saved choice, else wayland)",
+}
+
+// cliDisplay is the --display flag, else the saved choice. The terminal can't ask, so "ask" means Wayland.
+func cliDisplay(cmd *cli.Command, home string, logger *zap.Logger) (displaySystem, error) {
+	switch d := displaySystem(cmd.String("display")); d {
+	case displayWayland, displayXWayland:
+		return d, nil
+	case displayAsk:
+	default:
+		return "", fmt.Errorf("unknown display system %q, use wayland or xwayland", d)
+	}
+	if d := loadSettings(home, logger).Display; d != displayAsk {
+		return d, nil
+	}
+	return displayWayland, nil
 }
